@@ -13,6 +13,7 @@ import com.flutterwave.raveandroid.responses.RequeryResponse
 import com.flutterwave.raveandroid.responses.SaveCardResponse
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.Gson
+import dmax.dialog.SpotsDialog
 import kotlinx.android.synthetic.main.activity_main.*
 import org.jetbrains.anko.toast
 import java.util.*
@@ -36,19 +37,27 @@ class MainActivity : AppCompatActivity(), CardContract.View {
         get() = if (onStaging) "FLWPUBK_TEST-7ddb1c9cb4571aa27d588f468fb8c052-X"
         else "FLWPUBK-aec2b6c6cfe500854a21a0808f1ca280-X"
 
+    // Presenter defined inside SDK
     lateinit var presenter: CardPresenter
+
+    private val progressDialog by lazy {
+        SpotsDialog(this, "Please wait...", R.style.Custom)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Initialize the SDK
         val raver = RavePayManager(this)
             .onStagingEnv(onStaging).initializeNoUi()
         presenter = CardPresenter(this, this, raver.appComponent)
 
+        // Put default values in the editTexts
         setUpDefaultValues()
 
 
+        // Get values from form and pay
         pay_button.setOnClickListener {
             amount = amountEt.text.toString()
             email = emailEt.text.toString()
@@ -63,15 +72,15 @@ class MainActivity : AppCompatActivity(), CardContract.View {
     private fun setUpDefaultValues() {
         amountEt.setText("10")
         emailEt.setText("chairman@bossman.com")
-        cardNoEt.setText("5531886652142950")
+        cardNoEt.setText("5531886652142950")// This is a test card. See test cards here https://developer.flutterwave.com/v2.0/reference#test-cards-1
         cardExpiryEt.setText("06/20")
         cvvEt.setText("123")
     }
 
     private fun pay() {
-        val builder = PayloadBuilder()
+        val builder = PayloadBuilder()// Set the payment details
         builder.setAmount(amount)
-            .setCardno(amount)
+            .setCardno(cardNumber)
             .setCountry("NG")
             .setCurrency("NGN")
             .setCvv(cvv)
@@ -87,8 +96,124 @@ class MainActivity : AppCompatActivity(), CardContract.View {
 
         val body = builder.createPayload()
 
+        // This is the start point of the payment
         presenter.chargeCard(body, encryptionKey)
     }
+
+    /************************************************************************/
+    // Essential functions to override for your use case
+
+    /**
+     * Called to show or hide some sort of progress bar to the user.
+     * Like when a network call is being made by the SDK.
+     * @param active whether or not the progress bar should be shown (true) or hidden (false).
+     */
+    override fun showProgressIndicator(active: Boolean) {
+        if (active) {
+            if (!progressDialog.isShowing && !isFinishing) {
+                progressDialog.show()
+            }
+        } else {
+            progressDialog.dismiss()
+        }
+    }
+
+    /**
+     * This function is called when we need to get the pin of the card.
+     * Ideally, you'd get the Pin from the UI,
+     * then pass to the pin to the presenter with the presenter's chargeCardWithSuggestedAuthModel function.
+     */
+    override fun onPinAuthModelSuggested(payload: Payload?) {
+        toast("onPinAuthModelSuggested called")
+        presenter.chargeCardWithSuggestedAuthModel(
+            payload,
+            "3310",
+            RaveConstants.PIN,
+            encryptionKey
+        )
+    }
+
+    /**
+     * This function is called when we need to get the OTP
+     * Ideally, you'd get the OTP from the UI,
+     * then pass to the pin to the presenter with the presenter's validateCardCharge function.
+     */
+    override fun showOTPLayout(flwRef: String?, chargeResponseMessage: String?) {
+        this.flwRef = flwRef
+        toast("showOTPLayout called")
+        presenter.validateCardCharge(flwRef, otp, publicKey)
+    }
+
+    /**
+     * Called when the charge has been validated successfully.
+     * The requery function I called here is to confirm the status from the server.
+     */
+    override fun onValidateSuccessful(message: String?, responseAsString: String?) {
+        toast("onValidateSuccessful called")
+        presenter.requeryTx(flwRef, publicKey)
+    }
+
+    /**
+     * Called when the status has been confirmed successfully.
+     * Here we used and inner helper class to check transaction status
+     */
+    override fun onRequerySuccessful(
+        response: RequeryResponse?,
+        responseAsJSONString: String?,
+        flwRef: String?
+    ) {
+        val wasTxSuccessful: Boolean = TransactionStatusChecker(Gson())
+            .getTransactionStatus(amount, currency, responseAsJSONString)
+
+        if (wasTxSuccessful) {
+            onPaymentSuccessful(response!!.status, flwRef, responseAsJSONString, null)
+        } else {
+            onPaymentFailed(response!!.status, responseAsJSONString)
+        }
+        toast("onRequerySuccessful called")
+    }
+
+    /**
+     * Called when payment has been completed successfully.
+     * Since you're saving cards, you can use the @param flwRef to call this endpoint to get the card token:
+     * https://developer.flutterwave.com/v2.0/reference#xrequery-transaction-verification
+     * The card token is what you will use for subsequent charges.
+     * Check out the documentation here: https://developer.flutterwave.com/v2.0/reference#save-a-card
+     *
+     * Sha sha here, you can show the user that "Card saved successfully" or something.
+     */
+    override fun onPaymentSuccessful(
+        status: String?,
+        flwRef: String?,
+        responseAsString: String?,
+        ravePayInitializer: RavePayInitializer?
+    ) {
+        toast("onPaymentSuccessful called")
+        showSnackBar("Payment successful",true)
+    }
+
+
+    /** Called if the payment fails
+     *
+     */
+    override fun onPaymentFailed(status: String?, responseAsString: String?) {
+        toast("onPaymentFailed called")
+        showSnackBar("Payment successful",true)
+    }
+
+    /**
+     * Called when there's some sort of error during the process.
+     * Usually you'd just want to show a toast or something with the error message.
+     */
+    override fun onPaymentError(message: String?) {
+        message?.let { toast(it) }
+    }
+
+    /*************************************************************************/
+
+    // These functions, for now you don't need to handle them.
+    // Since you're in a hurry, we can come back to these later.
+
 
     override fun onCardSaveSuccessful(
         response: SaveCardResponse?,
@@ -100,55 +225,28 @@ class MainActivity : AppCompatActivity(), CardContract.View {
 
     override fun showToast(message: String?) {
         toast("message")
-
     }
 
     override fun onNoAuthInternationalSuggested(payload: Payload?) {
         toast("onNoAuthInternationalSuggested called")
     }
 
-    override fun onRequerySuccessful(
-        response: RequeryResponse?,
-        responseAsJSONString: String?,
-        flwRef: String?
-    ) {
-        val wasTxSuccessful: Boolean = TransactionStatusChecker(Gson())
-            .getTransactionStatus(
-                amount,
-                currency,
-                responseAsJSONString
-            )
-
-        if (wasTxSuccessful) {
-            onPaymentSuccessful(
-                response!!.status,
-                flwRef,
-                responseAsJSONString,
-                null
-            )
-        } else {
-            onPaymentFailed(response!!.status, responseAsJSONString)
-        }
-        toast("onRequerySuccessful called")
+    override fun onVBVAuthModelUsed(authUrlCrude: String?, flwRef: String?) {
+        toast("onVBVAuthModelUsed called")
     }
 
     override fun onPhoneNumberValidated(phoneNumber: String?) {
         toast("onPhoneNumberValidated called")
-
     }
 
     override fun onAmountValidated(amountToSet: String?, visibility: Int) {
         toast("onAmountValidated called")
-
     }
 
     override fun showFetchFeeFailed(s: String?) {
         s?.let { toast(it) }
     }
 
-    override fun onVBVAuthModelUsed(authUrlCrude: String?, flwRef: String?) {
-        toast("onVBVAuthModelUsed called")
-    }
 
     override fun showFieldError(viewID: Int, message: String?, viewtype: Class<*>?) {
         toast("showFieldError called")
@@ -156,11 +254,6 @@ class MainActivity : AppCompatActivity(), CardContract.View {
 
     override fun onTokenRetrievalError(s: String?) {
         toast("onTokenRetrievalError called")
-    }
-
-    override fun onPaymentFailed(status: String?, responseAsString: String?) {
-        toast("onPaymentFailed called")
-        showSnackBar("Payment successful",true)
     }
 
     override fun onValidateError(message: String?) {
@@ -195,36 +288,12 @@ class MainActivity : AppCompatActivity(), CardContract.View {
         toast("onValidateCardChargeFailed called")
     }
 
-    override fun onPaymentError(message: String?) {
-        message?.let { toast(it) }
-    }
-
-    override fun showOTPLayout(flwRef: String?, chargeResponseMessage: String?) {
-        this.flwRef = flwRef
-        toast("showOTPLayout called")
-        presenter.validateCardCharge(flwRef, otp, publicKey)
-    }
-
     override fun onChargeTokenComplete(response: ChargeResponse?) {
         toast("onChargeTokenComplete called")
     }
 
-    override fun onPaymentSuccessful(
-        status: String?,
-        flwRef: String?,
-        responseAsString: String?,
-        ravePayInitializer: RavePayInitializer?
-    ) {
-        toast("onPaymentSuccessful called")
-        showSnackBar("Payment successful",true)
-    }
-
     override fun showCardSavingOption(b: Boolean) {
         toast("showCardSavingOption called")
-    }
-
-    override fun showProgressIndicator(active: Boolean) {
-        toast("showProgressIndicator called")
     }
 
     override fun setHasSavedCards(b: Boolean) {
@@ -263,12 +332,6 @@ class MainActivity : AppCompatActivity(), CardContract.View {
         toast("onLookupSavedCardsFailed called")
     }
 
-    override fun onValidateSuccessful(message: String?, responseAsString: String?) {
-        toast("onValidateSuccessful called")
-        presenter.requeryTx(flwRef, publicKey)
-
-    }
-
     override fun onLookupSavedCardsSuccessful(
         response: LookupSavedCardsResponse?,
         responseAsJSONString: String?,
@@ -281,16 +344,7 @@ class MainActivity : AppCompatActivity(), CardContract.View {
         toast("showOTPLayoutForSavedCard called")
     }
 
-    override fun onPinAuthModelSuggested(payload: Payload?) {
-        toast("onPinAuthModelSuggested called")
-        presenter.chargeCardWithSuggestedAuthModel(
-            payload,
-            "3310",
-            RaveConstants.PIN,
-            encryptionKey
-        )
-    }
-
+    // Helper function to show snackbar
     private fun showSnackBar(message: String, static: Boolean) {
         var snackBarLength = Snackbar.LENGTH_SHORT
 
