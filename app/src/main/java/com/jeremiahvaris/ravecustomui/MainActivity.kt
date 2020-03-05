@@ -1,16 +1,22 @@
 package com.jeremiahvaris.ravecustomui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.flutterwave.raveandroid.*
 import com.flutterwave.raveandroid.card.CardContract
+import com.flutterwave.raveandroid.card.CardFragment
 import com.flutterwave.raveandroid.card.CardPresenter
 import com.flutterwave.raveandroid.data.SavedCard
 import com.flutterwave.raveandroid.responses.ChargeResponse
 import com.flutterwave.raveandroid.responses.LookupSavedCardsResponse
 import com.flutterwave.raveandroid.responses.RequeryResponse
 import com.flutterwave.raveandroid.responses.SaveCardResponse
+import com.flutterwave.raveandroid.verification.AVSVBVFragment
+import com.flutterwave.raveandroid.verification.OTPFragment
+import com.flutterwave.raveandroid.verification.PinFragment
+import com.flutterwave.raveandroid.verification.VerificationActivity
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.Gson
 import dmax.dialog.SpotsDialog
@@ -19,10 +25,10 @@ import org.jetbrains.anko.toast
 import java.util.*
 
 class MainActivity : AppCompatActivity(), CardContract.View {
+    private var payload: Payload? = null
     private lateinit var cvv: String
     private lateinit var expiryYear: String
     private lateinit var expiryMonth: String
-    private lateinit var cardNumber: String
     private lateinit var email: String
     private val currency: String="NGN"
     private var amount: String = "10.0"
@@ -30,12 +36,19 @@ class MainActivity : AppCompatActivity(), CardContract.View {
     private var flwRef: String?=null
     private val onStaging = true
 
+    private val FOR_SAVED_CARDS = 777
+
     private val encryptionKey: String
         get() = if (onStaging) "FLWSECK_TEST24a907495c60"
         else "7b52e2b832ecbb4451fe7b3b"
     private val publicKey: String
         get() = if (onStaging) "FLWPUBK_TEST-7ddb1c9cb4571aa27d588f468fb8c052-X"
         else "FLWPUBK-aec2b6c6cfe500854a21a0808f1ca280-X"
+
+
+    private val cardNumber: String
+        get() = if (onStaging) "5531886652142950"
+        else "5399830238662058"
 
     // Presenter defined inside SDK
     lateinit var presenter: CardPresenter
@@ -61,7 +74,6 @@ class MainActivity : AppCompatActivity(), CardContract.View {
         pay_button.setOnClickListener {
             amount = amountEt.text.toString()
             email = emailEt.text.toString()
-            cardNumber = cardNoEt.text.toString()
             expiryMonth = cardExpiryEt.text.toString().substring(0,2)
             expiryYear = cardExpiryEt.text.toString().substring(3)
             cvv = cvvEt.text.toString()
@@ -72,9 +84,9 @@ class MainActivity : AppCompatActivity(), CardContract.View {
     private fun setUpDefaultValues() {
         amountEt.setText("10")
         emailEt.setText("chairman@bossman.com")
-        cardNoEt.setText("5531886652142950")// This is a test card. See test cards here https://developer.flutterwave.com/v2.0/reference#test-cards-1
+        cardNoEt.setText(cardNumber)// This is a test card. See test cards here https://developer.flutterwave.com/v2.0/reference#test-cards-1
         cardExpiryEt.setText("06/20")
-        cvvEt.setText("123")
+        cvvEt.setText("972")
     }
 
     private fun pay() {
@@ -124,14 +136,21 @@ class MainActivity : AppCompatActivity(), CardContract.View {
      * then pass to the pin to the presenter with the presenter's chargeCardWithSuggestedAuthModel function.
      */
     override fun onPinAuthModelSuggested(payload: Payload?) {
-        toast("onPinAuthModelSuggested called")
-        presenter.chargeCardWithSuggestedAuthModel(
-            payload,
-            "3310",
-            RaveConstants.PIN,
-            encryptionKey
-        )
+//        toast("onPinAuthModelSuggested called")
+        this.payload = payload
+        val intent = Intent(this, VerificationActivity::class.java)
+        intent.putExtra(VerificationActivity.EXTRA_IS_STAGING, onStaging)
+        intent.putExtra(VerificationActivity.PUBLIC_KEY_EXTRA, publicKey)
+        intent.putExtra(VerificationActivity.ACTIVITY_MOTIVE, "pin")
+        intent.putExtra("theme", R.style.DefaultTheme)
+        startActivityForResult(intent, CardFragment.FOR_PIN)
     }
+    ////        presenter.chargeCardWithSuggestedAuthModel(
+//            payload,
+//            "3310",
+//            RaveConstants.PIN,
+//            encryptionKey
+//        )}
 
     /**
      * This function is called when we need to get the OTP
@@ -140,8 +159,14 @@ class MainActivity : AppCompatActivity(), CardContract.View {
      */
     override fun showOTPLayout(flwRef: String?, chargeResponseMessage: String?) {
         this.flwRef = flwRef
-        toast("showOTPLayout called")
-        presenter.validateCardCharge(flwRef, otp, publicKey)
+//        toast("showOTPLayout called")
+        val intent = Intent(this, VerificationActivity::class.java)
+        intent.putExtra(VerificationActivity.EXTRA_IS_STAGING, onStaging)
+        intent.putExtra(VerificationActivity.PUBLIC_KEY_EXTRA, publicKey)
+        intent.putExtra(OTPFragment.EXTRA_CHARGE_MESSAGE, chargeResponseMessage)
+        intent.putExtra(VerificationActivity.ACTIVITY_MOTIVE, "otp")
+        intent.putExtra("theme", R.style.DefaultTheme)
+        startActivityForResult(intent, CardFragment.FOR_OTP)
     }
 
     /**
@@ -207,6 +232,48 @@ class MainActivity : AppCompatActivity(), CardContract.View {
      */
     override fun onPaymentError(message: String?) {
         message?.let { toast(it) }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (resultCode == RavePayActivity.RESULT_SUCCESS) { //just to be sure this v sent the receiving intent
+            if (requestCode == CardFragment.FOR_PIN) {
+                val pin = data?.getStringExtra(PinFragment.EXTRA_PIN)
+                presenter.chargeCardWithSuggestedAuthModel(payload, pin, RaveConstants.PIN, encryptionKey)
+            } else if (requestCode == CardFragment.FOR_AVBVV) {
+                val address = data?.getStringExtra(AVSVBVFragment.EXTRA_ADDRESS)
+                val state = data?.getStringExtra(AVSVBVFragment.EXTRA_STATE)
+                val city = data?.getStringExtra(AVSVBVFragment.EXTRA_CITY)
+                val zipCode = data?.getStringExtra(AVSVBVFragment.EXTRA_ZIPCODE)
+                val country = data?.getStringExtra(AVSVBVFragment.EXTRA_COUNTRY)
+                presenter.chargeCardWithAVSModel(
+                    payload, address, city, zipCode, country, state,
+                    RaveConstants.NOAUTH_INTERNATIONAL, encryptionKey
+                )
+            } else if (requestCode == CardFragment.FOR_INTERNET_BANKING) {
+                presenter.requeryTx(flwRef, publicKey)
+            } else if (requestCode == CardFragment.FOR_OTP) {
+                val otp = data?.getStringExtra(OTPFragment.EXTRA_OTP)
+                if (data!=null){
+                    if (data.getBooleanExtra(OTPFragment.IS_SAVED_CARD_CHARGE, false)) {
+                    payload?.setOtp(otp)
+                    presenter.chargeSavedCard(payload, encryptionKey)
+                } else presenter.validateCardCharge(flwRef, otp,publicKey)
+                }
+
+            }
+//            else if (requestCode == FOR_SAVED_CARDS) {
+//                if (data.hasExtra(SavedCardsFragment.EXTRA_SAVED_CARDS)) {
+//                    val savedCardToCharge = Gson().fromJson(
+//                        data.getStringExtra(SavedCardsFragment.EXTRA_SAVED_CARDS),
+//                        SavedCard::class.java
+//                    )
+//                    onSavedCardSelected(savedCardToCharge)
+//                }
+//                presenter.checkForSavedCardsInMemory(ravePayInitializer)
+//            }
+        } else {
+            super.onActivityResult(requestCode, resultCode, data)
+        }
     }
 
     /*************************************************************************/
